@@ -11,12 +11,12 @@ using namespace llvm;
 
 namespace {
 
-void getBlocks(Function &F, std::vector<BasicBlock *> &retBlocks, std::vector<BasicBlock *> &UnreachableBlocks) {
+void getBlocks(Function &F, std::vector<BasicBlock *> &RetBlocks, std::vector<BasicBlock *> &UnreachableBlocks) {
   for (BasicBlock &BB : F) {
     const Instruction* terminator = BB.getTerminator();
 
     if (isa<ReturnInst>(terminator))
-      retBlocks.push_back(&BB);
+      RetBlocks.push_back(&BB);
     else if (isa<UnreachableInst>(terminator))
       UnreachableBlocks.push_back(&BB);
   }
@@ -27,9 +27,34 @@ void constructCommonUnreachableBlock(Function &F, std::vector<BasicBlock *> &Unr
   new UnreachableInst(F.getContext(), CommonUnreachableBlock);
 
   for (BasicBlock *BB : UnreachableBlocks) {
-    BB->back().eraseFromParent(); // Remove the unreachable inst.
+    BB->back().eraseFromParent();
     BranchInst::Create(CommonUnreachableBlock, BB);
   }
+}
+
+void constructCommonReturnBlock(Function &F, std::vector<BasicBlock *> &ReturnBlocks) {
+    BasicBlock *CommonReturnBlock = BasicBlock::Create(F.getContext(), "CommonReturnBlock", &F);
+    PHINode *PN = nullptr;
+    Type *ReturnType = F.getReturnType();
+
+    if (ReturnType->isVoidTy()) {
+      ReturnInst::Create(F.getContext(), nullptr, CommonReturnBlock);
+    }
+    else {
+      PN = PHINode::Create(ReturnType, ReturnBlocks.size(), "CommonRetVal");
+      PN->insertInto(CommonReturnBlock, CommonReturnBlock->end());
+      ReturnInst::Create(F.getContext(), PN, CommonReturnBlock);
+    }
+
+    for (BasicBlock *BB : ReturnBlocks) {
+      ReturnInst *retInst = cast<ReturnInst>(BB->getTerminator());
+      if (PN != nullptr) {
+        PN->addIncoming(retInst->getReturnValue(), BB);
+      }
+
+      retInst->eraseFromParent();
+      BranchInst::Create(CommonReturnBlock, BB);
+    }
 }
 
 // The implementation of the pass
@@ -43,6 +68,10 @@ bool runMergeReturn(Function &F) {
 
   if (UnreachableBlocks.size() > 1) {
     constructCommonUnreachableBlock(F, UnreachableBlocks);
+  }
+
+  if (ReturnBlocks.size() > 1) {
+    constructCommonReturnBlock(F, ReturnBlocks);
   }
 
   return true;
